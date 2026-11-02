@@ -1,7 +1,9 @@
 """Modul backend autentikasi Flask dengan antarmuka web interaktif."""
 
+import hmac
+import os
 import sqlite3
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
@@ -48,7 +50,25 @@ def index():
         "index.html", message=message, status_class=status_class
     )
 
+@app.route("/health")
+def health():
+    """Endpoint pemeriksaan kesehatan layanan (tanpa autentikasi)."""
+    return jsonify(status="ok", service="flask-login-app")
+
+@app.route("/api/status")
+def api_status():
+    """Endpoint terproteksi API key yang dibaca dari environment variable."""
+    expected_key = os.environ.get("API_KEY", "")
+    provided_key = request.headers.get("X-API-Key", "")
+
+    if not expected_key or not hmac.compare_digest(
+        provided_key.encode(), expected_key.encode()
+    ):
+        return jsonify(error="Unauthorized"), 401
+
+    return jsonify(status="authorized", message="API key valid")
+
 if __name__ == "__main__":
     init_db()
     app.run(host="0.0.0.0", port=5000)  # nosemgrep
-
+    
