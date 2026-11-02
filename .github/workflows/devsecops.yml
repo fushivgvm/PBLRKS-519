@@ -7,6 +7,10 @@ on:
         branches: ["main", "master"]
     workflow_dispatch: {}
 
+# Least privilege: token hanya boleh membaca isi repo
+permissions:
+    contents: read
+
 jobs:
     # ==========================================
     # CI JOB 1: SAST Scan (Semgrep)
@@ -21,7 +25,6 @@ jobs:
               uses: actions/checkout@v4
 
             - name: Run Semgrep SAST
-              # --exclude=".github" mencegah Semgrep memeriksa file workflow YAML
               run: semgrep scan --config auto --error --verbose --exclude=".github"
 
     # ==========================================
@@ -49,12 +52,36 @@ jobs:
               run: pylint --fail-under=9.0 app.py
 
     # ==========================================
+    # CI JOB 3: Secret Scanning (Gitleaks)
+    # ==========================================
+    secret-scan:
+        name: Gitleaks Secret Scan
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            pull-requests: read   # dibutuhkan Gitleaks untuk membaca commit pada PR
+        steps:
+            - name: Checkout Source Code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0   # ambil seluruh riwayat commit
+
+            - name: Run Gitleaks
+              uses: gitleaks/gitleaks-action@v2
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # ==========================================
     # CD STAGE: Deploy ke VM
+    # Hanya berjalan setelah merge ke main (bukan saat PR)
     # ==========================================
     deploy-to-vm:
         name: Build & Deploy to VirtualBox VM
-        needs: [sast-scan, pylint-check]
+        needs: [sast-scan, pylint-check, secret-scan]
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: self-hosted
+        env:
+            API_KEY: ${{ secrets.API_KEY }}
         steps:
             - name: Checkout Source Code
               uses: actions/checkout@v4
@@ -64,5 +91,7 @@ jobs:
                   docker build -t secure-flask-app:latest .
                   docker stop web-flask || true
                   docker rm web-flask || true
-                  docker run -d -p 5000:5000 --name web-flask secure-flask-app:latest
+                  docker run -d -p 5000:5000 --restart unless-stopped \
+                    -e API_KEY="$API_KEY" \
+                    --name web-flask secure-flask-app:latest
                   docker ps | grep web-flask
